@@ -12,14 +12,14 @@ type connHandle struct {
 	factory          ZookeeperFactory
 	ensembleProvider ensemble.EnsembleProvider
 	sessionTimeout   time.Duration
-	helper           *currentConnection
+	current          *currentConnection
 }
 
 func (c *connHandle) HasNewConnectionString() bool {
-	if c.helper != nil {
-		hc, l := c.helper.hosts, len(c.helper.hosts)
+	if c.current != nil {
+		hc, l := c.current.hosts, len(c.current.hosts)
 		prov := c.ensembleProvider.Hosts()
-		if l > 0 && l == len(prov) {
+		if l > 0 && l == len(prov) { // compare host collections
 			for _, h := range hc {
 				var found bool
 				for _, p := range prov {
@@ -29,24 +29,26 @@ func (c *connHandle) HasNewConnectionString() bool {
 					}
 				}
 				if !found {
-					return false
+					return true
 				}
 			}
+		} else { // only when the if guard doesn't match
+			return l > 0
 		}
 	}
 	return false
 }
 
 func (c *connHandle) Conn() zk.IConn {
-	if c.helper != nil {
-		return c.helper.conn
+	if c.current != nil {
+		return c.current.conn
 	}
 	return nil
 }
 
 func (c *connHandle) Close() (err error) {
 	err = c.internalClose()
-	c.helper = nil
+	c.current = nil
 	return
 }
 
@@ -59,7 +61,7 @@ func (c *connHandle) Reconnect() (<-chan zk.Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.helper = &currentConnection{hosts: hosts, conn: conn}
+	c.current = &currentConnection{hosts: hosts, conn: conn}
 	return w, nil
 }
 

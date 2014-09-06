@@ -49,6 +49,35 @@ func TestFixedEnsembleProvider(t *testing.T) {
 				So(len(hosts), ShouldEqual, 1)
 				So(path, ShouldEqual, "/")
 			})
+
+			Convey("fail to parse when there are no hosts", func() {
+				s := "zookeeper://"
+				_, _, err := parseZookeeperUri(s)
+				So(err, ShouldNotBeNil)
+			})
+		})
+
+		Convey("when creating", func() {
+			s := "zk://blah-blah-123:2181,foo-3939:2181,bar-bar-eei494:2181/a-path-here"
+			prov, pth, err := New(s)
+			So(err, ShouldBeNil)
+			So(pth, ShouldEqual, "/a-path-here")
+
+			Convey("start should not have an error", func() {
+				e := prov.Start()
+				So(e, ShouldBeNil)
+			})
+
+			Convey("stop should not have an error", func() {
+				e := prov.Close()
+				So(e, ShouldBeNil)
+			})
+
+			Convey("start should not have an error", func() {
+				e := prov.Hosts()
+				So(len(e), ShouldEqual, 3)
+			})
+
 		})
 	})
 }

@@ -2,6 +2,9 @@
 package curator
 
 import (
+	"container/list"
+	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,18 +20,22 @@ import (
 // connection and reconnect with the newly detected ensemble
 type ConnectionState struct {
 	sync.Mutex
-	isConnected     int32
-	conn            connHandle
-	parentWatchers  events.EventBus
-	started         time.Time
-	connectionCount int32
+	isConnected       int32
+	conn              connHandle
+	parentWatchers    events.EventBus
+	started           time.Time
+	connectionCount   int32
+	connectionTimeout time.Duration
+	errorQueue        *list.List
 }
 
 // NewConnectionState creates a new instance of connection state for the provided params
 func NewConnectionState(factory ZookeeperFactory, ensembleProvider ensemble.EnsembleProvider, sessionTimeout time.Duration, connectionTimeout time.Duration) *ConnectionState {
 	return &ConnectionState{
-		parentWatchers: events.New(),
-		conn:           connHandle{factory: factory, ensembleProvider: ensembleProvider, sessionTimeout: sessionTimeout},
+		parentWatchers:    events.New(),
+		conn:              connHandle{factory: factory, ensembleProvider: ensembleProvider, sessionTimeout: sessionTimeout},
+		connectionTimeout: connectionTimeout,
+		errorQueue:        list.New(),
 	}
 }
 
@@ -61,6 +68,10 @@ func (c *ConnectionState) Close() error {
 	return nil
 }
 
+func (c *ConnectionState) InstanceIndex() int32 {
+	return c.connectionCount
+}
+
 func (c *ConnectionState) reset() error {
 	c.connectionCount++
 	c.started = time.Now()
@@ -69,8 +80,20 @@ func (c *ConnectionState) reset() error {
 	if err != nil {
 		return err
 	}
+	for {
+		e := <-w
+		if e.State == zk.StateHasSession {
+			break
+		} else if e.State == zk.StateExpired {
+			return fmt.Errorf("Connection to %q expired %d.", c.conn.ensembleProvider.Hosts(), c.conn.sessionTimeout)
+		}
+	}
 	c.connectionLoop(w)
 	return nil
+}
+
+func (c *ConnectionState) CurrentConnectionString() []string {
+	return c.conn.ensembleProvider.Hosts()
 }
 
 func (c *ConnectionState) connectionLoop(connWatch <-chan zk.Event) {
@@ -95,11 +118,26 @@ func (c *ConnectionState) connectionLoop(connWatch <-chan zk.Event) {
 func (c *ConnectionState) backgroundReset() {
 	c.Lock()
 	defer c.Unlock()
-	// TODO: Put this error on a queue, and use in the Conn() method
-	c.reset()
+	err := c.reset()
+	if err != nil {
+		if c.errorQueue.Len() >= 10 {
+			el := c.errorQueue.Back()
+			c.errorQueue.Remove(el)
+		}
+		c.errorQueue.PushFront(err)
+		return
+	}
 }
 
 func (c *ConnectionState) Conn() (zk.IConn, error) {
+	var err error = nil
+	for e := c.errorQueue.Front(); e != nil; e = e.Next() {
+		err = e.Value.(error)
+		c.errorQueue.Remove(e)
+	}
+	if err != nil {
+		return nil, err
+	}
 	return c.conn.Conn(), nil
 }
 
@@ -125,4 +163,26 @@ func (c *ConnectionState) checkEvent(evt zk.Event, wasConnected bool) bool {
 		c.backgroundReset()
 	}
 	return isConnected
+}
+
+func (c *ConnectionState) checkTimeouts() error {
+	sTo, cTo := float64(c.conn.sessionTimeout.Nanoseconds()), float64(c.connectionTimeout.Nanoseconds())
+	minTimeout := int64(math.Min(sTo, cTo))
+	elapsed := time.Now().UnixNano() - minTimeout
+
+	if elapsed >= minTimeout {
+		if c.conn.HasNewConnectionString() {
+			c.backgroundReset()
+		} else {
+
+			maxTimeout := int64(math.Max(sTo, cTo))
+
+			if elapsed > maxTimeout {
+				return c.reset()
+			} else {
+				return fmt.Errorf("Curator connection timed out with %v/%v", maxTimeout, elapsed)
+			}
+		}
+	}
+	return nil
 }
