@@ -7,6 +7,7 @@ import (
 
 	"github.com/casualjim/go-zookeeper/zk"
 	"github.com/op/go-logging"
+	"github.com/rcrowley/go-metrics"
 )
 
 var log = logging.MustGetLogger("events")
@@ -45,9 +46,15 @@ func (e *defaultEventBus) dispatcherLoop(timeout time.Duration) {
 	for {
 		select {
 		case evt := <-e.channel:
-			for _, handler := range e.handlers {
-				go e.dispatchEventWithTimeout(handler, timeout, evt)
-			}
+			timer := metrics.GetOrRegisterTimer("curator.connection.events.notify", metrics.DefaultRegistry)
+			go timer.Time(func() {
+				var wg sync.WaitGroup
+				wg.Add(len(e.handlers))
+				for _, handler := range e.handlers {
+					go e.dispatchEventWithTimeout(handler, timeout, evt, &wg)
+				}
+				wg.Wait()
+			})
 		case closed := <-e.closing:
 			close(e.channel)
 			for _, handler := range e.handlers {
@@ -60,7 +67,7 @@ func (e *defaultEventBus) dispatcherLoop(timeout time.Duration) {
 	}
 }
 
-func (e *defaultEventBus) dispatchEventWithTimeout(channel chan<- zk.Event, timeout time.Duration, event zk.Event) {
+func (e *defaultEventBus) dispatchEventWithTimeout(channel chan<- zk.Event, timeout time.Duration, event zk.Event, wg *sync.WaitGroup) {
 	timer := time.NewTimer(timeout)
 	select {
 	case channel <- event:
@@ -69,6 +76,7 @@ func (e *defaultEventBus) dispatchEventWithTimeout(channel chan<- zk.Event, time
 		log.Warning("Failed to send event %+v to listener within %v", event, timeout)
 		e.Remove(channel)
 	}
+	wg.Done()
 }
 
 func (e *defaultEventBus) Trigger() chan<- zk.Event {

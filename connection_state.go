@@ -12,6 +12,7 @@ import (
 	"github.com/casualjim/go-curator/ensemble"
 	"github.com/casualjim/go-curator/shared/events"
 	"github.com/casualjim/go-zookeeper/zk"
+	"github.com/rcrowley/go-metrics"
 )
 
 // connectionState implements the reliable connection to zookeeper
@@ -107,6 +108,18 @@ func (c *connectionState) connectionLoop(connWatch <-chan zk.Event, wasConnected
 	}()
 }
 
+func (c *connectionState) handleNewConnectionString() {
+	logger.Info("Connection string changed")
+	metrics.GetOrRegisterCounter("curator.connection.hosts.changed", metrics.DefaultRegistry).Inc(1)
+	c.backgroundReset()
+}
+
+func (c *connectionState) handleSessionExpired() {
+	logger.Warning("Session expired event received")
+	metrics.GetOrRegisterCounter("curator.connection.session.expired", metrics.DefaultRegistry).Inc(1)
+	c.backgroundReset()
+}
+
 func (c *connectionState) backgroundReset() {
 	c.Lock()
 	defer c.Unlock()
@@ -124,6 +137,7 @@ func (c *connectionState) backgroundReset() {
 func (c *connectionState) Conn() (zk.IConn, error) {
 	var err error
 	for e := c.errorQueue.Front(); e != nil; e = e.Next() {
+		metrics.GetOrRegisterCounter("curator.connection.background-error", metrics.DefaultRegistry).Inc(1)
 		err = e.Value.(error)
 		c.errorQueue.Remove(e)
 	}
@@ -155,14 +169,14 @@ func (c *connectionState) checkEvent(evt zk.Event, wasConnected bool) bool {
 	case zk.StateExpired:
 		isConnected = false
 		checkNewConnectionString = false
-		c.backgroundReset()
+		c.handleSessionExpired()
 	case zk.StateSaslAuthenticated:
 	default:
 		isConnected = false
 	}
 
 	if checkNewConnectionString && c.conn.HasNewConnectionString() {
-		c.backgroundReset()
+		c.handleNewConnectionString()
 	}
 	return isConnected
 }
@@ -174,12 +188,13 @@ func (c *connectionState) checkTimeouts() error {
 
 	if elapsed >= minTimeout {
 		if c.conn.HasNewConnectionString() {
-			c.backgroundReset()
+			c.handleNewConnectionString()
 		} else {
 			maxTimeout := int64(math.Max(sTo, cTo))
 			if elapsed > maxTimeout {
 				return c.reset()
 			} else {
+				metrics.GetOrRegisterCounter("curator.connection.timeout", metrics.DefaultRegistry).Inc(1)
 				return fmt.Errorf("Curator connection timed out with %v/%v", maxTimeout, elapsed)
 			}
 		}
