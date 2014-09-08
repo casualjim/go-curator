@@ -12,44 +12,47 @@ import (
 const (
 	hostAndPort = "[A-z0-9-.]+(?::\\d+)?"
 	zNode       = "[^/]+"
-	zkUrl       = "^(?:(?:zk|zookeeper)://)?(" + hostAndPort + "(?:," + hostAndPort + ")*)/?(:?(" + zNode + "(?:/" + zNode + ")*))*$"
+	zkURL       = "^(?:(?:zk|zookeeper)://)?(" + hostAndPort + "(?:," + hostAndPort + ")*)/?(:?(" + zNode + "(?:/" + zNode + ")*))*$"
 )
 
 var (
-	zkUrlRegex = regexp.MustCompile(zkUrl)
+	zkURLRegex = regexp.MustCompile(zkURL)
 )
 
-// EnsembleProvider provides the zookeeper connection string
-type EnsembleProvider interface {
+// Provider provides the zookeeper connection string
+type Provider interface {
 	io.Closer
 	Start() error
 	Hosts() []string
 }
 
-// FixedEnsembleProvider is a constant ensemble, it never changes and is created with a connection string
-type FixedEnsembleProvider struct {
+type fixedEnsembleProvider struct {
 	hosts []string
 }
 
-func (p *FixedEnsembleProvider) Start() error {
+// Start starts this ensemble provider
+func (p *fixedEnsembleProvider) Start() error {
 	return nil
 }
 
-func (p *FixedEnsembleProvider) Close() error {
+// Close stops this ensemble provider
+func (p *fixedEnsembleProvider) Close() error {
 	return nil
 }
 
-func (p *FixedEnsembleProvider) Hosts() []string {
+// Hosts returns list of zookeeper hosts with their ports [name:port] for this ensemble
+func (p *fixedEnsembleProvider) Hosts() []string {
 	return p.hosts
 }
 
-func New(uri string) (EnsembleProvider, string, error) {
-	hosts, path, err := parseZookeeperUri(uri)
-	return &FixedEnsembleProvider{hosts: hosts}, path, err
+// Fixed returns a fixed ensemble provider, fixed to the ensemble provded by the uri string
+func Fixed(uri string) (Provider, string, error) {
+	hosts, path, err := parseZookeeperURI(uri)
+	return &fixedEnsembleProvider{hosts: hosts}, path, err
 }
 
-func parseZookeeperUri(uri string) ([]string, string, error) {
-	parsed := zkUrlRegex.FindStringSubmatch(uri)
+func parseZookeeperURI(uri string) ([]string, string, error) {
+	parsed := zkURLRegex.FindStringSubmatch(uri)
 	if len(parsed) < 2 {
 		return nil, "", errors.New("The uri " + uri + " is not a valid connection string for zookeeper")
 	}

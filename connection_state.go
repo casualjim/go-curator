@@ -11,14 +11,14 @@ import (
 
 	"github.com/casualjim/go-curator/ensemble"
 	"github.com/casualjim/go-curator/shared/events"
-	"github.com/obeattie/go-zookeeper/zk"
+	"github.com/casualjim/go-zookeeper/zk"
 )
 
-// ConnectionState implements the reliable connection to zookeeper
+// connectionState implements the reliable connection to zookeeper
 // and raising the events when the state in the connection changes.
 // Should it detect that the connection string changes, it will disconnect the previous
 // connection and reconnect with the newly detected ensemble
-type ConnectionState struct {
+type connectionState struct {
 	sync.Mutex
 	isConnected       int32
 	conn              connHandle
@@ -30,8 +30,8 @@ type ConnectionState struct {
 }
 
 // NewConnectionState creates a new instance of connection state for the provided params
-func NewConnectionState(factory ZookeeperFactory, ensembleProvider ensemble.EnsembleProvider, sessionTimeout time.Duration, connectionTimeout time.Duration) *ConnectionState {
-	return &ConnectionState{
+func newConnectionState(factory ZookeeperFactory, ensembleProvider ensemble.Provider, sessionTimeout time.Duration, connectionTimeout time.Duration) *connectionState {
+	return &connectionState{
 		parentWatchers:    events.New(),
 		conn:              connHandle{factory: factory, ensembleProvider: ensembleProvider, sessionTimeout: sessionTimeout},
 		connectionTimeout: connectionTimeout,
@@ -40,27 +40,27 @@ func NewConnectionState(factory ZookeeperFactory, ensembleProvider ensemble.Ense
 }
 
 // AddParentWatcher adds a connection watcher, gets notified when something happens with the connection
-func (c *ConnectionState) AddParentWatcher(watcher chan<- zk.Event) {
+func (c *connectionState) AddParentWatcher(watcher chan<- zk.Event) {
 	c.parentWatchers.Add(watcher)
 }
 
 // RemoveParentWatcher removes a parent watcher
-func (c *ConnectionState) RemoveParentWatcher(watcher chan<- zk.Event) {
+func (c *connectionState) RemoveParentWatcher(watcher chan<- zk.Event) {
 	c.parentWatchers.Remove(watcher)
 }
 
 // IsConnected returns true when this connection is actually connected
-func (c *ConnectionState) IsConnected() bool {
+func (c *connectionState) IsConnected() bool {
 	return c.isConnected > 0
 }
 
-func (c *ConnectionState) Start() error {
+func (c *connectionState) Start() error {
 	c.Lock()
 	defer c.Unlock()
 	return c.reset()
 }
 
-func (c *ConnectionState) Close() error {
+func (c *connectionState) Close() error {
 	if atomic.CompareAndSwapInt32(&c.isConnected, 1, 0) {
 		return c.conn.Close()
 
@@ -68,39 +68,31 @@ func (c *ConnectionState) Close() error {
 	return nil
 }
 
-func (c *ConnectionState) InstanceIndex() int32 {
+func (c *connectionState) InstanceIndex() int32 {
 	return c.connectionCount
 }
 
-func (c *ConnectionState) reset() error {
+func (c *connectionState) reset() error {
 	c.connectionCount++
 	c.started = time.Now()
+	wasConnected := c.IsConnected()
 	c.isConnected = 0
 	w, err := c.conn.Reconnect()
 	if err != nil {
 		return err
 	}
-	for {
-		e := <-w
-		if e.State == zk.StateHasSession {
-			break
-		} else if e.State == zk.StateExpired {
-			return fmt.Errorf("Connection to %q expired %d.", c.conn.ensembleProvider.Hosts(), c.conn.sessionTimeout)
-		}
-	}
-	c.connectionLoop(w)
+	c.connectionLoop(w, wasConnected)
 	return nil
 }
 
-func (c *ConnectionState) CurrentConnectionString() []string {
+func (c *connectionState) CurrentConnectionString() []string {
 	return c.conn.ensembleProvider.Hosts()
 }
 
-func (c *ConnectionState) connectionLoop(connWatch <-chan zk.Event) {
+func (c *connectionState) connectionLoop(connWatch <-chan zk.Event, wasConnected bool) {
 	go func() {
 		for evt := range connWatch {
 			c.parentWatchers.Trigger() <- evt
-			wasConnected := c.IsConnected()
 			newIsConnected := wasConnected
 			if evt.Type == zk.EventSession {
 				newIsConnected = c.checkEvent(evt, wasConnected)
@@ -115,22 +107,22 @@ func (c *ConnectionState) connectionLoop(connWatch <-chan zk.Event) {
 	}()
 }
 
-func (c *ConnectionState) backgroundReset() {
+func (c *connectionState) backgroundReset() {
 	c.Lock()
 	defer c.Unlock()
 	err := c.reset()
 	if err != nil {
 		if c.errorQueue.Len() >= 10 {
-			el := c.errorQueue.Back()
+			el := c.errorQueue.Front()
 			c.errorQueue.Remove(el)
 		}
-		c.errorQueue.PushFront(err)
+		c.errorQueue.PushBack(err)
 		return
 	}
 }
 
-func (c *ConnectionState) Conn() (zk.IConn, error) {
-	var err error = nil
+func (c *connectionState) Conn() (zk.IConn, error) {
+	var err error
 	for e := c.errorQueue.Front(); e != nil; e = e.Next() {
 		err = e.Value.(error)
 		c.errorQueue.Remove(e)
@@ -138,18 +130,27 @@ func (c *ConnectionState) Conn() (zk.IConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c.IsConnected() {
+		err = c.checkTimeouts()
+		if err != nil {
+			return nil, err
+		}
+	}
 	return c.conn.Conn(), nil
 }
 
-func (c *ConnectionState) checkEvent(evt zk.Event, wasConnected bool) bool {
+func (c *connectionState) checkEvent(evt zk.Event, wasConnected bool) bool {
 	isConnected := wasConnected
 	checkNewConnectionString := true
 	switch evt.State {
 	case zk.StateDisconnected:
 		isConnected = false
-	case zk.StateSyncConnected | zk.StateConnectedReadOnly:
+	case zk.StateSyncConnected:
+		fallthrough
+	case zk.StateConnectedReadOnly:
 		isConnected = true
 	case zk.StateAuthFailed:
+		logger.Critical("Authentication failed")
 		isConnected = false
 	case zk.StateExpired:
 		isConnected = false
@@ -159,24 +160,23 @@ func (c *ConnectionState) checkEvent(evt zk.Event, wasConnected bool) bool {
 	default:
 		isConnected = false
 	}
+
 	if checkNewConnectionString && c.conn.HasNewConnectionString() {
 		c.backgroundReset()
 	}
 	return isConnected
 }
 
-func (c *ConnectionState) checkTimeouts() error {
+func (c *connectionState) checkTimeouts() error {
 	sTo, cTo := float64(c.conn.sessionTimeout.Nanoseconds()), float64(c.connectionTimeout.Nanoseconds())
 	minTimeout := int64(math.Min(sTo, cTo))
-	elapsed := time.Now().UnixNano() - minTimeout
+	elapsed := time.Now().UnixNano() - c.started.UnixNano()
 
 	if elapsed >= minTimeout {
 		if c.conn.HasNewConnectionString() {
 			c.backgroundReset()
 		} else {
-
 			maxTimeout := int64(math.Max(sTo, cTo))
-
 			if elapsed > maxTimeout {
 				return c.reset()
 			} else {

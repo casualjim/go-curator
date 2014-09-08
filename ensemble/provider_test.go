@@ -7,7 +7,7 @@ import (
 )
 
 func testParseUri(s string) string {
-	hosts, path, err := parseZookeeperUri(s)
+	hosts, path, err := parseZookeeperURI(s)
 	So(err, ShouldBeNil)
 	So(len(hosts), ShouldEqual, 3)
 	return path
@@ -44,7 +44,7 @@ func TestFixedEnsembleProvider(t *testing.T) {
 
 			Convey("parse a uri with single host", func() {
 				s := "blah-blah-123:2181"
-				hosts, path, err := parseZookeeperUri(s)
+				hosts, path, err := parseZookeeperURI(s)
 				So(err, ShouldBeNil)
 				So(len(hosts), ShouldEqual, 1)
 				So(path, ShouldEqual, "/")
@@ -52,14 +52,14 @@ func TestFixedEnsembleProvider(t *testing.T) {
 
 			Convey("fail to parse when there are no hosts", func() {
 				s := "zookeeper://"
-				_, _, err := parseZookeeperUri(s)
+				_, _, err := parseZookeeperURI(s)
 				So(err, ShouldNotBeNil)
 			})
 		})
 
 		Convey("when creating", func() {
 			s := "zk://blah-blah-123:2181,foo-3939:2181,bar-bar-eei494:2181/a-path-here"
-			prov, pth, err := New(s)
+			prov, pth, err := Fixed(s)
 			So(err, ShouldBeNil)
 			So(pth, ShouldEqual, "/a-path-here")
 

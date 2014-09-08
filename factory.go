@@ -3,20 +3,23 @@ package curator
 import (
 	"time"
 
-	"github.com/obeattie/go-zookeeper/zk"
+	"github.com/casualjim/go-zookeeper/zk"
 )
 
+// ZookeeperFactory an abstraction over connecting to zookeeper, useful in tests
 type ZookeeperFactory interface {
-	NewZookeeper(hosts []string, timeout time.Duration) (zk.IConn, <-chan zk.Event, error)
+	NewZookeeper(hosts []string, sessionTimeout time.Duration) (zk.IConn, <-chan zk.Event, error)
 }
 
 type defaultZookeeperFactory struct {
 }
 
-func (f *defaultZookeeperFactory) NewZookeeper(servers []string, timeout time.Duration) (zk.IConn, <-chan zk.Event, error) {
-	return zk.Connect(servers, timeout)
+func (f *defaultZookeeperFactory) NewZookeeper(servers []string, sessionTimeout time.Duration) (zk.IConn, <-chan zk.Event, error) {
+	return zk.Connect(servers, sessionTimeout)
 }
 
-func DefaultFactory() ZookeeperFactory {
+// DefaultZookeeperFactory returns the default zookeeper factory that makes an actual connection
+// to the specified ensemble hosts.
+func DefaultZookeeperFactory() ZookeeperFactory {
 	return &defaultZookeeperFactory{}
 }

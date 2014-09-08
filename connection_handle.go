@@ -1,16 +1,15 @@
 package curator
 
 import (
-	"log"
 	"time"
 
 	"github.com/casualjim/go-curator/ensemble"
-	"github.com/obeattie/go-zookeeper/zk"
+	"github.com/casualjim/go-zookeeper/zk"
 )
 
 type connHandle struct {
 	factory          ZookeeperFactory
-	ensembleProvider ensemble.EnsembleProvider
+	ensembleProvider ensemble.Provider
 	sessionTimeout   time.Duration
 	current          *currentConnection
 }
@@ -56,6 +55,7 @@ func (c *connHandle) Reconnect() (<-chan zk.Event, error) {
 	if err := c.internalClose(); err != nil {
 		return nil, err
 	}
+	c.current = nil
 	hosts := c.ensembleProvider.Hosts()
 	conn, w, err := c.factory.NewZookeeper(hosts, c.sessionTimeout)
 	if err != nil {
@@ -68,7 +68,7 @@ func (c *connHandle) Reconnect() (<-chan zk.Event, error) {
 func (c *connHandle) internalClose() error {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Fatal(r)
+			logger.Critical("%+v", r)
 		}
 	}()
 	if conn := c.Conn(); conn != nil {

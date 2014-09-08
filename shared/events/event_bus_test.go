@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/obeattie/go-zookeeper/zk"
+	"github.com/casualjim/go-zookeeper/zk"
 	//. "github.com/onsi/gomega"
 	. "github.com/smartystreets/goconvey/convey"
 )
