@@ -93,11 +93,18 @@ func (c *CuratorConn) RemoveParentWatcher(watcher chan<- zk.Event) {
 	c.state.RemoveParentWatcher(watcher)
 }
 
-// ConnectionIndex the index of this connection, roughly the amount of reconnections
+// ConnectionIndex the index of this connection, the amount of reconnections
 func (c *CuratorConn) ConnectionIndex() int32 {
 	return c.state.InstanceIndex()
 }
 
+// IsConnected() returns true when this client is connected
+func (c *CuratorConn) IsConnected() bool {
+	return c.state.IsConnected()
+}
+
+// BlockUntilConnectedOrTimedOut blocks until the connection to ZK succeeds. Use with caution. The block
+// will timeout after the connection timeout (as passed to the constructor) has elapsed
 func (c *CuratorConn) BlockUntilConnectedOrTimedOut() (bool, error) {
 	if c.started == 0 {
 		return false, errors.New("The client needs to be started before you can make a connection")
