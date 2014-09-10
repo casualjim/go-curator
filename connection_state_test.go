@@ -140,7 +140,7 @@ func TestConnectionState(t *testing.T) {
 
 				state.started = time.Now().Add(-1500 * time.Millisecond)
 				p, _, _ := ensemble.Fixed("zk://localhost:3939/foo")
-				state.conn.ensembleProvider = p
+				state.conn.(*connHandle).ensembleProvider = p
 				c, e := state.Conn()
 				So(c, ShouldNotBeNil)
 				So(e, ShouldBeNil)

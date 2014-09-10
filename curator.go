@@ -25,7 +25,7 @@ func ForeverPolicy(retryCount int, elapsed time.Duration) bool {
 // CuratorConn wraps a zookeeper connection and takes care of some house keeping
 // to keep the connection reliable and so on.
 type CuratorConn struct {
-	state             *connectionState
+	state             ConnectionState
 	RetryPolicy       RetryPolicy
 	ConnectionTimeout time.Duration
 	started           int32

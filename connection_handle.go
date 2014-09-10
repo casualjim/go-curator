@@ -1,17 +1,35 @@
 package curator
 
 import (
+	"io"
 	"time"
 
 	"github.com/casualjim/go-curator/ensemble"
 	"github.com/casualjim/go-zookeeper/zk"
 )
 
+type ConnectionHandle interface {
+	io.Closer
+	Conn() zk.IConn
+	Reconnect() (<-chan zk.Event, error)
+	HasNewConnectionString() bool
+	Hosts() []string
+	SessionTimeout() time.Duration
+}
+
 type connHandle struct {
 	factory          ZookeeperFactory
 	ensembleProvider ensemble.Provider
 	sessionTimeout   time.Duration
 	current          *currentConnection
+}
+
+func (c *connHandle) Hosts() []string {
+	return c.ensembleProvider.Hosts()
+}
+
+func (c *connHandle) SessionTimeout() time.Duration {
+	return c.sessionTimeout
 }
 
 func (c *connHandle) HasNewConnectionString() bool {

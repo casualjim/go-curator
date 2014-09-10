@@ -15,6 +15,7 @@ type defaultZookeeperFactory struct {
 }
 
 func (f *defaultZookeeperFactory) NewZookeeper(servers []string, sessionTimeout time.Duration) (zk.IConn, <-chan zk.Event, error) {
+	logger.Debug("Connecting to %v", servers)
 	return zk.Connect(servers, sessionTimeout)
 }
 

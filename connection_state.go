@@ -4,6 +4,7 @@ package curator
 import (
 	"container/list"
 	"fmt"
+	"io"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -15,14 +16,34 @@ import (
 	"github.com/rcrowley/go-metrics"
 )
 
-// connectionState implements the reliable connection to zookeeper
+type ParentWatchable interface {
+	AddParentWatcher(watcher chan<- zk.Event)
+	RemoveParentWatcher(watcher chan<- zk.Event)
+}
+
+type Startable interface {
+	Start() error
+}
+
+type ConnectionState interface {
+	io.Closer
+	ParentWatchable
+	Startable
+
+	InstanceIndex() int32
+	CurrentConnectionString() []string
+	Conn() (zk.IConn, error)
+	IsConnected() bool
+}
+
+// connState implements the reliable connection to zookeeper
 // and raising the events when the state in the connection changes.
 // Should it detect that the connection string changes, it will disconnect the previous
 // connection and reconnect with the newly detected ensemble
-type connectionState struct {
+type connState struct {
 	sync.Mutex
 	isConnected       int32
-	conn              connHandle
+	conn              ConnectionHandle
 	parentWatchers    events.EventBus
 	started           time.Time
 	connectionCount   int32
@@ -31,37 +52,37 @@ type connectionState struct {
 }
 
 // NewConnectionState creates a new instance of connection state for the provided params
-func newConnectionState(factory ZookeeperFactory, ensembleProvider ensemble.Provider, sessionTimeout time.Duration, connectionTimeout time.Duration) *connectionState {
-	return &connectionState{
+func newConnectionState(factory ZookeeperFactory, ensembleProvider ensemble.Provider, sessionTimeout time.Duration, connectionTimeout time.Duration) *connState {
+	return &connState{
 		parentWatchers:    events.New(),
-		conn:              connHandle{factory: factory, ensembleProvider: ensembleProvider, sessionTimeout: sessionTimeout},
+		conn:              &connHandle{factory: factory, ensembleProvider: ensembleProvider, sessionTimeout: sessionTimeout},
 		connectionTimeout: connectionTimeout,
 		errorQueue:        list.New(),
 	}
 }
 
 // AddParentWatcher adds a connection watcher, gets notified when something happens with the connection
-func (c *connectionState) AddParentWatcher(watcher chan<- zk.Event) {
+func (c *connState) AddParentWatcher(watcher chan<- zk.Event) {
 	c.parentWatchers.Add(watcher)
 }
 
 // RemoveParentWatcher removes a parent watcher
-func (c *connectionState) RemoveParentWatcher(watcher chan<- zk.Event) {
+func (c *connState) RemoveParentWatcher(watcher chan<- zk.Event) {
 	c.parentWatchers.Remove(watcher)
 }
 
 // IsConnected returns true when this connection is actually connected
-func (c *connectionState) IsConnected() bool {
+func (c *connState) IsConnected() bool {
 	return c.isConnected > 0
 }
 
-func (c *connectionState) Start() error {
+func (c *connState) Start() error {
 	c.Lock()
 	defer c.Unlock()
 	return c.reset()
 }
 
-func (c *connectionState) Close() error {
+func (c *connState) Close() error {
 	if atomic.CompareAndSwapInt32(&c.isConnected, 1, 0) {
 		return c.conn.Close()
 
@@ -69,11 +90,11 @@ func (c *connectionState) Close() error {
 	return nil
 }
 
-func (c *connectionState) InstanceIndex() int32 {
+func (c *connState) InstanceIndex() int32 {
 	return c.connectionCount
 }
 
-func (c *connectionState) reset() error {
+func (c *connState) reset() error {
 	c.connectionCount++
 	c.started = time.Now()
 	wasConnected := c.IsConnected()
@@ -86,11 +107,11 @@ func (c *connectionState) reset() error {
 	return nil
 }
 
-func (c *connectionState) CurrentConnectionString() []string {
-	return c.conn.ensembleProvider.Hosts()
+func (c *connState) CurrentConnectionString() []string {
+	return c.conn.Hosts()
 }
 
-func (c *connectionState) connectionLoop(connWatch <-chan zk.Event, wasConnected bool) {
+func (c *connState) connectionLoop(connWatch <-chan zk.Event, wasConnected bool) {
 	go func() {
 		for evt := range connWatch {
 			c.parentWatchers.Trigger() <- evt
@@ -108,19 +129,19 @@ func (c *connectionState) connectionLoop(connWatch <-chan zk.Event, wasConnected
 	}()
 }
 
-func (c *connectionState) handleNewConnectionString() {
+func (c *connState) handleNewConnectionString() {
 	logger.Info("Connection string changed")
 	metrics.GetOrRegisterCounter("curator.connection.hosts.changed", metrics.DefaultRegistry).Inc(1)
 	c.backgroundReset()
 }
 
-func (c *connectionState) handleSessionExpired() {
+func (c *connState) handleSessionExpired() {
 	logger.Warning("Session expired event received")
 	metrics.GetOrRegisterCounter("curator.connection.session.expired", metrics.DefaultRegistry).Inc(1)
 	c.backgroundReset()
 }
 
-func (c *connectionState) backgroundReset() {
+func (c *connState) backgroundReset() {
 	c.Lock()
 	defer c.Unlock()
 	err := c.reset()
@@ -134,7 +155,7 @@ func (c *connectionState) backgroundReset() {
 	}
 }
 
-func (c *connectionState) Conn() (zk.IConn, error) {
+func (c *connState) Conn() (zk.IConn, error) {
 	var err error
 	for e := c.errorQueue.Front(); e != nil; e = e.Next() {
 		metrics.GetOrRegisterCounter("curator.connection.background-error", metrics.DefaultRegistry).Inc(1)
@@ -153,7 +174,7 @@ func (c *connectionState) Conn() (zk.IConn, error) {
 	return c.conn.Conn(), nil
 }
 
-func (c *connectionState) checkEvent(evt zk.Event, wasConnected bool) bool {
+func (c *connState) checkEvent(evt zk.Event, wasConnected bool) bool {
 	isConnected := wasConnected
 	checkNewConnectionString := true
 	switch evt.State {
@@ -181,8 +202,8 @@ func (c *connectionState) checkEvent(evt zk.Event, wasConnected bool) bool {
 	return isConnected
 }
 
-func (c *connectionState) checkTimeouts() error {
-	sTo, cTo := float64(c.conn.sessionTimeout.Nanoseconds()), float64(c.connectionTimeout.Nanoseconds())
+func (c *connState) checkTimeouts() error {
+	sTo, cTo := float64(c.conn.SessionTimeout().Nanoseconds()), float64(c.connectionTimeout.Nanoseconds())
 	minTimeout := int64(math.Min(sTo, cTo))
 	elapsed := time.Now().UnixNano() - c.started.UnixNano()
 
