@@ -4,7 +4,7 @@ import (
 	"errors"
 	"math"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/casualjim/go-curator/ensemble"
@@ -25,10 +25,12 @@ func ForeverPolicy(retryCount int, elapsed time.Duration) bool {
 // CuratorConn wraps a zookeeper connection and takes care of some house keeping
 // to keep the connection reliable and so on.
 type CuratorConn struct {
+	sync.Mutex
 	state             ConnectionState
 	RetryPolicy       RetryPolicy
 	ConnectionTimeout time.Duration
 	started           int32
+	startedPtr        *int32
 }
 
 // NewWithFactory creates a new CuratorConn with the provided factory and ensemble provider
@@ -37,12 +39,14 @@ func NewWithFactory(factory ZookeeperFactory, prov ensemble.Provider, sessionTim
 		logger.Warning("session timeout [%d] is less than connection timeout [%d]", sessionTimeout, connectionTimeout)
 	}
 
-	return &CuratorConn{
+	conn := &CuratorConn{
 		state:             newConnectionState(factory, prov, sessionTimeout, connectionTimeout),
 		RetryPolicy:       ForeverPolicy,
 		ConnectionTimeout: connectionTimeout,
 		started:           0,
-	}, nil
+	}
+	conn.startedPtr = &conn.started
+	return conn, nil
 }
 
 // NewFromURI creates a new CuratorConn for the connection string
@@ -66,16 +70,25 @@ func (c *CuratorConn) CurrentConnectionString() (string, error) {
 
 // Start starts this curator connection
 func (c *CuratorConn) Start() error {
-	if !atomic.CompareAndSwapInt32(&c.started, c.started, 1) {
+	c.Lock()
+	defer c.Unlock()
+	if c.started == 1 {
 		logger.Warning("Called start on CuratorConn more than once")
 		return nil
 	}
-	return c.state.Start()
+	err := c.state.Start()
+	if err != nil {
+		return err
+	}
+	c.started = 1
+	return nil
 }
 
 // Close closes this zookeeper client, disconnects and cleans up state
 func (c *CuratorConn) Close() error {
-	atomic.SwapInt32(&c.started, 0)
+	c.Lock()
+	defer c.Unlock()
+	c.started = 0
 	var err error
 	if c.state != nil {
 		err = c.state.Close()
@@ -111,30 +124,34 @@ func (c *CuratorConn) BlockUntilConnectedOrTimedOut() (bool, error) {
 	}
 	logger.Debug("BlockUntilConnectedOrTimedOut start")
 
-	err := c.internalBlockUntilConnectedOrTimedOut()
-	if err != nil {
-		return false, err
-	}
+	c.internalBlockUntilConnectedOrTimedOut()
 
-	isConnected := c.state.IsConnected()
+	isConnected := c.IsConnected()
 	logger.Debug("BlockUntilConnectedOrTimedOut end. isConnected: %t", isConnected)
 	return isConnected, nil
 
 }
 
-func (c *CuratorConn) internalBlockUntilConnectedOrTimedOut() error {
+func (c *CuratorConn) internalBlockUntilConnectedOrTimedOut() {
 	waitTime := c.ConnectionTimeout.Nanoseconds()
-	for !c.state.IsConnected() && waitTime > 0 {
-		watcher := make(chan zk.Event)
-		c.state.AddParentWatcher(watcher)
-		startTime := time.Now()
-		select { // Block until timeout or until a connection event was received
-		case <-watcher:
-		case <-time.After(1 * time.Second):
-		}
-		c.state.RemoveParentWatcher(watcher)
-		elapsed := math.Max(1, float64(time.Now().UnixNano()-startTime.UnixNano()))
-		waitTime = waitTime - int64(elapsed)
+	for !c.IsConnected() && waitTime > 0 {
+		waitTime = c.withTempWatcher(waitTime, func(watcher chan zk.Event) {
+			select { // Block until timeout or until a connection event was received
+			case <-watcher:
+			case <-time.After(1 * time.Second):
+			}
+		})
 	}
-	return nil
+}
+
+func (c *CuratorConn) withTempWatcher(waitTime int64, thunk func(watcher chan zk.Event)) int64 {
+	watcher := make(chan zk.Event)
+	c.AddParentWatcher(watcher)
+	startTime := time.Now()
+
+	thunk(watcher)
+
+	c.RemoveParentWatcher(watcher)
+	elapsed := math.Max(1, float64(time.Now().UnixNano()-startTime.UnixNano()))
+	return waitTime - int64(elapsed)
 }

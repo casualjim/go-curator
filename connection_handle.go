@@ -63,10 +63,17 @@ func (c *connHandle) Conn() zk.IConn {
 	return nil
 }
 
-func (c *connHandle) Close() (err error) {
-	err = c.internalClose()
-	c.current = nil
-	return
+func (c *connHandle) Close() error {
+	defer func() {
+		c.current = nil
+		if r := recover(); r != nil {
+			logger.Critical("%+v", r)
+		}
+	}()
+	if conn := c.Conn(); conn != nil {
+		conn.Close()
+	}
+	return nil
 }
 
 func (c *connHandle) Reconnect() (<-chan zk.Event, error) {
@@ -84,13 +91,8 @@ func (c *connHandle) Reconnect() (<-chan zk.Event, error) {
 }
 
 func (c *connHandle) internalClose() error {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Critical("%+v", r)
-		}
-	}()
 	if conn := c.Conn(); conn != nil {
-		conn.Close()
+		return conn.Reconnect()
 	}
 	return nil
 }

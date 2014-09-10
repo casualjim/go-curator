@@ -86,7 +86,7 @@ func TestConnHandle(t *testing.T) {
 			})
 
 			Convey("close the connection before reconnecting", func() {
-				fact.conn.EXPECT().Close()
+				fact.conn.EXPECT().Reconnect()
 				handle.Reconnect()
 			})
 		})

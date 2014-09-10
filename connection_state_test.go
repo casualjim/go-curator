@@ -61,6 +61,7 @@ func TestConnectionState(t *testing.T) {
 		Convey("when connected and acquiring a connection", func() {
 			state.Start()
 			factory.conn.EXPECT().Close().AnyTimes()
+			factory.conn.EXPECT().Reconnect().AnyTimes()
 
 			Convey("it returns an error when there is an error on the queue", func() {
 				state.errorQueue.PushBack(fmt.Errorf("expected"))
