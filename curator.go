@@ -22,35 +22,53 @@ func ForeverPolicy(retryCount int, elapsed time.Duration) bool {
 	return true
 }
 
-// CuratorConn wraps a zookeeper connection and takes care of some house keeping
+type watcherFactory interface {
+	MakeWatcher() chan zk.Event
+	Invalidate()
+}
+
+type defaultWatcherFactory struct {
+}
+
+func (d *defaultWatcherFactory) MakeWatcher() chan zk.Event {
+	return make(chan zk.Event)
+}
+
+func (d *defaultWatcherFactory) Invalidate() {
+
+}
+
+// Conn wraps a zookeeper connection and takes care of some house keeping
 // to keep the connection reliable and so on.
-type CuratorConn struct {
+type Conn struct {
 	sync.Mutex
 	state             ConnectionState
 	RetryPolicy       RetryPolicy
 	ConnectionTimeout time.Duration
 	started           int32
 	startedPtr        *int32
+	watcherFactory    watcherFactory
 }
 
-// NewWithFactory creates a new CuratorConn with the provided factory and ensemble provider
-func NewWithFactory(factory ZookeeperFactory, prov ensemble.Provider, sessionTimeout time.Duration, connectionTimeout time.Duration) (*CuratorConn, error) {
+// NewWithFactory creates a new Conn with the provided factory and ensemble provider
+func NewWithFactory(factory ZookeeperFactory, prov ensemble.Provider, sessionTimeout time.Duration, connectionTimeout time.Duration) (*Conn, error) {
 	if sessionTimeout < connectionTimeout {
 		logger.Warning("session timeout [%d] is less than connection timeout [%d]", sessionTimeout, connectionTimeout)
 	}
 
-	conn := &CuratorConn{
+	conn := &Conn{
 		state:             newConnectionState(factory, prov, sessionTimeout, connectionTimeout),
 		RetryPolicy:       ForeverPolicy,
 		ConnectionTimeout: connectionTimeout,
 		started:           0,
+		watcherFactory:    &defaultWatcherFactory{},
 	}
 	conn.startedPtr = &conn.started
 	return conn, nil
 }
 
-// NewFromURI creates a new CuratorConn for the connection string
-func NewFromURI(uri string, sessionTimeout time.Duration, connectionTimeout time.Duration) (*CuratorConn, error) {
+// NewFromURI creates a new Conn for the connection string
+func NewFromURI(uri string, sessionTimeout time.Duration, connectionTimeout time.Duration) (*Conn, error) {
 	factory := DefaultZookeeperFactory()
 	prov, _, err := ensemble.Fixed(uri)
 	if err != nil {
@@ -61,7 +79,7 @@ func NewFromURI(uri string, sessionTimeout time.Duration, connectionTimeout time
 }
 
 // CurrentConnectionString the hosts for the current connection
-func (c *CuratorConn) CurrentConnectionString() (string, error) {
+func (c *Conn) CurrentConnectionString() (string, error) {
 	if c.started == 0 {
 		return "", errors.New("The client needs to be started before you can get a connection string")
 	}
@@ -69,11 +87,11 @@ func (c *CuratorConn) CurrentConnectionString() (string, error) {
 }
 
 // Start starts this curator connection
-func (c *CuratorConn) Start() error {
+func (c *Conn) Start() error {
 	c.Lock()
 	defer c.Unlock()
 	if c.started == 1 {
-		logger.Warning("Called start on CuratorConn more than once")
+		logger.Warning("Called start on Conn more than once")
 		return nil
 	}
 	err := c.state.Start()
@@ -85,7 +103,7 @@ func (c *CuratorConn) Start() error {
 }
 
 // Close closes this zookeeper client, disconnects and cleans up state
-func (c *CuratorConn) Close() error {
+func (c *Conn) Close() error {
 	c.Lock()
 	defer c.Unlock()
 	c.started = 0
@@ -97,28 +115,39 @@ func (c *CuratorConn) Close() error {
 }
 
 // AddParentWatcher adds a connection watcher, receives zookeeper events
-func (c *CuratorConn) AddParentWatcher(watcher chan<- zk.Event) {
+func (c *Conn) AddParentWatcher(watcher chan<- zk.Event) {
 	c.state.AddParentWatcher(watcher)
 }
 
 // RemoveParentWatcher removes a connection watcher
-func (c *CuratorConn) RemoveParentWatcher(watcher chan<- zk.Event) {
+func (c *Conn) RemoveParentWatcher(watcher chan<- zk.Event) {
 	c.state.RemoveParentWatcher(watcher)
 }
 
+// AddParentWatcher adds a connection watcher, receives zookeeper events
+func (c *Conn) AddParentWatcherHolder(watcherHolder *WatcherHolder) {
+	c.state.AddParentWatcherHolder(watcherHolder)
+}
+
+// RemoveParentWatcher removes a connection watcher
+func (c *Conn) RemoveParentWatcherHolder(watcherHolder *WatcherHolder) {
+	c.state.RemoveParentWatcherHolder(watcherHolder)
+}
+
 // ConnectionIndex the index of this connection, the amount of reconnections
-func (c *CuratorConn) ConnectionIndex() int32 {
+func (c *Conn) ConnectionIndex() int32 {
 	return c.state.InstanceIndex()
 }
 
 // IsConnected() returns true when this client is connected
-func (c *CuratorConn) IsConnected() bool {
+func (c *Conn) IsConnected() bool {
+	logger.Debug("calling is connected")
 	return c.state.IsConnected()
 }
 
 // BlockUntilConnectedOrTimedOut blocks until the connection to ZK succeeds. Use with caution. The block
 // will timeout after the connection timeout (as passed to the constructor) has elapsed
-func (c *CuratorConn) BlockUntilConnectedOrTimedOut() (bool, error) {
+func (c *Conn) BlockUntilConnectedOrTimedOut() (bool, error) {
 	if c.started == 0 {
 		return false, errors.New("The client needs to be started before you can make a connection")
 	}
@@ -132,20 +161,42 @@ func (c *CuratorConn) BlockUntilConnectedOrTimedOut() (bool, error) {
 
 }
 
-func (c *CuratorConn) internalBlockUntilConnectedOrTimedOut() {
+func (c *Conn) internalBlockUntilConnectedOrTimedOut() {
+	logger.Debug("Entering internalBlockUntilConnectedOrTimedOut")
 	waitTime := c.ConnectionTimeout.Nanoseconds()
+	logger.Debug("about to start loop")
 	for !c.IsConnected() && waitTime > 0 {
-		waitTime = c.withTempWatcher(waitTime, func(watcher chan zk.Event) {
-			select { // Block until timeout or until a connection event was received
-			case <-watcher:
-			case <-time.After(1 * time.Second):
-			}
-		})
+		logger.Debug("Passing through internalBlockUntilConnectedOrTimedOut loop")
+		// waitTime = c.withTempWatcher(waitTime, func(watcher chan zk.Event) {
+		// 	select { // Block until timeout or until a connection event was received
+		// 	case <-watcher:
+		// 	case <-time.After(1 * time.Second):
+		// 	}
+		// })
+		// watcher := c.watcherFactory.MakeWatcher()
+		watcher := &WatcherHolder{make(chan zk.Event)}
+		c.AddParentWatcherHolder(watcher)
+		startTime := time.Now()
+
+		select { // Block until timeout or until a connection event was received
+		case <-watcher.Watcher:
+			logger.Debug("the watcher received an event")
+		case <-time.After(1 * time.Second):
+			logger.Debug("this loop timed out")
+		}
+		logger.Debug("Passed the select block")
+		c.RemoveParentWatcherHolder(watcher)
+		// c.watcherFactory.Invalidate()
+		elapsed := math.Max(1, float64(time.Now().UnixNano()-startTime.UnixNano()))
+		waitTime = waitTime - int64(elapsed)
+		logger.Debug("exiting loop")
 	}
+	logger.Debug("Leaving internalBlockUntilConnectedOrTimedOut")
 }
 
-func (c *CuratorConn) withTempWatcher(waitTime int64, thunk func(watcher chan zk.Event)) int64 {
+func (c *Conn) withTempWatcher(waitTime int64, thunk func(watcher chan zk.Event)) int64 {
 	watcher := make(chan zk.Event)
+
 	c.AddParentWatcher(watcher)
 	startTime := time.Now()
 

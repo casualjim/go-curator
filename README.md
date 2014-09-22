@@ -18,7 +18,7 @@ handled withing 50ms (by default) then the handler gets unregistered and a warni
 
 ### How it works
 
-CuratorConnection 
+Connection 
   * every operation is handled in a retry loop
   * a connection is watched and when a session event occurs an appropriate action is taken, on expired session it reconnects
   * the retry loop does: 

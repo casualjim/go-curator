@@ -16,9 +16,16 @@ import (
 	"github.com/rcrowley/go-metrics"
 )
 
+// WatcherHolder is a construct to allow gomock to ignore calls
+type WatcherHolder struct {
+	Watcher chan zk.Event
+}
+
 type ParentWatchable interface {
 	AddParentWatcher(watcher chan<- zk.Event)
+	AddParentWatcherHolder(watcherHolder *WatcherHolder)
 	RemoveParentWatcher(watcher chan<- zk.Event)
+	RemoveParentWatcherHolder(watcherHolder *WatcherHolder)
 }
 
 type Startable interface {
@@ -66,9 +73,21 @@ func (c *connState) AddParentWatcher(watcher chan<- zk.Event) {
 	c.parentWatchers.Add(watcher)
 }
 
+func (c *connState) AddParentWatcherHolder(watcherHolder *WatcherHolder) {
+	if watcherHolder != nil && watcherHolder.Watcher != nil {
+		c.parentWatchers.Add(watcherHolder.Watcher)
+	}
+}
+
 // RemoveParentWatcher removes a parent watcher
 func (c *connState) RemoveParentWatcher(watcher chan<- zk.Event) {
 	c.parentWatchers.Remove(watcher)
+}
+
+func (c *connState) RemoveParentWatcherHolder(watcherHolder *WatcherHolder) {
+	if watcherHolder != nil && watcherHolder.Watcher != nil {
+		c.parentWatchers.Remove(watcherHolder.Watcher)
+	}
 }
 
 // IsConnected returns true when this connection is actually connected

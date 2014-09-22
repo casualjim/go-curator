@@ -1,6 +1,7 @@
 package curator
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -11,23 +12,42 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
+type recyclingWatcherFactory struct {
+	current chan zk.Event
+}
+
+func (r *recyclingWatcherFactory) MakeWatcher() chan zk.Event {
+	if r.current == nil {
+		r.current = make(chan zk.Event)
+	}
+	return r.current
+}
+
+func (r *recyclingWatcherFactory) Invalidate() {
+	if r.current != nil {
+		close(r.current)
+		r.current = nil
+	}
+}
+
 func TestCurator(t *testing.T) {
 
 	Convey("The curator zookeeper client should", t, func() {
 		//RegisterTestingT(t)
 		mockCtrl := gomock.NewController(t)
 		state := mocks.NewMockConnectionState(mockCtrl)
-		conn := &CuratorConn{
+		conn := &Conn{
 			state:             state,
 			RetryPolicy:       ForeverPolicy,
 			ConnectionTimeout: 3 * time.Second,
 			started:           0,
+			watcherFactory:    &recyclingWatcherFactory{},
 		}
 		conn.startedPtr = &conn.started
 
 		Reset(func() {
-			conn.Close()
 			mockCtrl.Finish()
+			conn.Close()
 		})
 
 		Convey("when not yet started", func() {
@@ -70,6 +90,59 @@ func TestCurator(t *testing.T) {
 				res, err := conn.CurrentConnectionString()
 				So(err, ShouldBeNil)
 				So(res, ShouldEqual, expected)
+			})
+
+			Convey("BlockUntilConnectedOrTimedOut returns immediately when connected", func() {
+				state.EXPECT().IsConnected().Times(2).Return(true)
+				res, err := conn.BlockUntilConnectedOrTimedOut()
+				So(err, ShouldBeNil)
+				So(res, ShouldBeTrue)
+			})
+
+			Convey("BlockUntilConnectedOrTimedOut eventually returns true", func() {
+
+				gomock.InOrder(
+					state.EXPECT().IsConnected().Return(false),
+					state.EXPECT().IsConnected().Return(false),
+					state.EXPECT().IsConnected().Return(true).AnyTimes(),
+				)
+				state.EXPECT().AddParentWatcher(conn.watcherFactory.MakeWatcher()).AnyTimes()
+				// state.EXPECT().IsConnected().Return(false)
+				// state.EXPECT().IsConnected().Return(true)
+				// state.EXPECT().IsConnected().Return(true)
+
+				result := make(chan error)
+				go func() {
+					res, err := conn.BlockUntilConnectedOrTimedOut()
+					logger.Debug("Returned with: %v, %v", res, err)
+					if !res {
+						result <- errors.New("Not connected!")
+					} else {
+						if err != nil {
+							result <- err
+						} else {
+							result <- nil
+						}
+					}
+				}()
+
+				err2 := make(chan error)
+				go func() {
+					for {
+						select {
+						case r := <-result:
+							err2 <- r
+							break
+						case <-time.After(10 * time.Second):
+							err2 <- errors.New("Timed out!")
+							break
+						}
+					}
+				}()
+
+				actual := <-err2
+				So(actual, ShouldBeNil)
+
 			})
 
 		})
