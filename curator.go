@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/casualjim/go-curator/ensemble"
+	"github.com/casualjim/go-curator/shared"
 	"github.com/casualjim/go-zookeeper/zk"
 	"github.com/op/go-logging"
 )
@@ -124,16 +125,6 @@ func (c *Conn) RemoveParentWatcher(watcher chan<- zk.Event) {
 	c.state.RemoveParentWatcher(watcher)
 }
 
-// AddParentWatcher adds a connection watcher, receives zookeeper events
-func (c *Conn) AddParentWatcherHolder(watcherHolder *WatcherHolder) {
-	c.state.AddParentWatcherHolder(watcherHolder)
-}
-
-// RemoveParentWatcher removes a connection watcher
-func (c *Conn) RemoveParentWatcherHolder(watcherHolder *WatcherHolder) {
-	c.state.RemoveParentWatcherHolder(watcherHolder)
-}
-
 // ConnectionIndex the index of this connection, the amount of reconnections
 func (c *Conn) ConnectionIndex() int32 {
 	return c.state.InstanceIndex()
@@ -174,8 +165,8 @@ func (c *Conn) internalBlockUntilConnectedOrTimedOut() {
 		// 	}
 		// })
 		// watcher := c.watcherFactory.MakeWatcher()
-		watcher := &WatcherHolder{make(chan zk.Event)}
-		c.AddParentWatcherHolder(watcher)
+		watcher := &shared.WatcherHolder{make(chan zk.Event)}
+		c.state.AddParentWatcherHolder(watcher)
 		startTime := time.Now()
 
 		select { // Block until timeout or until a connection event was received
@@ -185,7 +176,7 @@ func (c *Conn) internalBlockUntilConnectedOrTimedOut() {
 			logger.Debug("this loop timed out")
 		}
 		logger.Debug("Passed the select block")
-		c.RemoveParentWatcherHolder(watcher)
+		c.state.RemoveParentWatcherHolder(watcher)
 		// c.watcherFactory.Invalidate()
 		elapsed := math.Max(1, float64(time.Now().UnixNano()-startTime.UnixNano()))
 		waitTime = waitTime - int64(elapsed)
