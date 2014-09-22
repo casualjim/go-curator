@@ -5,6 +5,7 @@ package mocks
 
 import (
 	gomock "code.google.com/p/gomock/gomock"
+	"github.com/casualjim/go-curator/shared"
 	zk "github.com/casualjim/go-zookeeper/zk"
 )
 
@@ -35,6 +36,14 @@ func (_m *MockConnectionState) AddParentWatcher(_param0 chan<- zk.Event) {
 
 func (_mr *_MockConnectionStateRecorder) AddParentWatcher(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "AddParentWatcher", arg0)
+}
+
+func (_m *MockConnectionState) AddParentWatcherHolder(_param0 *shared.WatcherHolder) {
+	_m.ctrl.Call(_m, "AddParentWatcherHolder", _param0)
+}
+
+func (_mr *_MockConnectionStateRecorder) AddParentWatcherHolder(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "AddParentWatcherHolder", arg0)
 }
 
 func (_m *MockConnectionState) Close() error {
@@ -94,6 +103,14 @@ func (_m *MockConnectionState) RemoveParentWatcher(_param0 chan<- zk.Event) {
 
 func (_mr *_MockConnectionStateRecorder) RemoveParentWatcher(arg0 interface{}) *gomock.Call {
 	return _mr.mock.ctrl.RecordCall(_mr.mock, "RemoveParentWatcher", arg0)
+}
+
+func (_m *MockConnectionState) RemoveParentWatcherHolder(_param0 *shared.WatcherHolder) {
+	_m.ctrl.Call(_m, "RemoveParentWatcherHolder", _param0)
+}
+
+func (_mr *_MockConnectionStateRecorder) RemoveParentWatcherHolder(arg0 interface{}) *gomock.Call {
+	return _mr.mock.ctrl.RecordCall(_mr.mock, "RemoveParentWatcherHolder", arg0)
 }
 
 func (_m *MockConnectionState) Start() error {

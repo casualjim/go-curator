@@ -132,7 +132,6 @@ func (c *Conn) ConnectionIndex() int32 {
 
 // IsConnected() returns true when this client is connected
 func (c *Conn) IsConnected() bool {
-	logger.Debug("calling is connected")
 	return c.state.IsConnected()
 }
 
@@ -153,47 +152,27 @@ func (c *Conn) BlockUntilConnectedOrTimedOut() (bool, error) {
 }
 
 func (c *Conn) internalBlockUntilConnectedOrTimedOut() {
-	logger.Debug("Entering internalBlockUntilConnectedOrTimedOut")
 	waitTime := c.ConnectionTimeout.Nanoseconds()
-	logger.Debug("about to start loop")
 	for !c.IsConnected() && waitTime > 0 {
-		logger.Debug("Passing through internalBlockUntilConnectedOrTimedOut loop")
-		// waitTime = c.withTempWatcher(waitTime, func(watcher chan zk.Event) {
-		// 	select { // Block until timeout or until a connection event was received
-		// 	case <-watcher:
-		// 	case <-time.After(1 * time.Second):
-		// 	}
-		// })
-		// watcher := c.watcherFactory.MakeWatcher()
-		watcher := &shared.WatcherHolder{make(chan zk.Event)}
-		c.state.AddParentWatcherHolder(watcher)
-		startTime := time.Now()
-
-		select { // Block until timeout or until a connection event was received
-		case <-watcher.Watcher:
-			logger.Debug("the watcher received an event")
-		case <-time.After(1 * time.Second):
-			logger.Debug("this loop timed out")
-		}
-		logger.Debug("Passed the select block")
-		c.state.RemoveParentWatcherHolder(watcher)
-		// c.watcherFactory.Invalidate()
-		elapsed := math.Max(1, float64(time.Now().UnixNano()-startTime.UnixNano()))
-		waitTime = waitTime - int64(elapsed)
-		logger.Debug("exiting loop")
+		waitTime = c.withTempWatcher(waitTime, func(watcher chan zk.Event) {
+			select { // Block until timeout or until a connection event was received
+			case <-watcher:
+			case <-time.After(1 * time.Second):
+			}
+		})
 	}
-	logger.Debug("Leaving internalBlockUntilConnectedOrTimedOut")
 }
 
 func (c *Conn) withTempWatcher(waitTime int64, thunk func(watcher chan zk.Event)) int64 {
-	watcher := make(chan zk.Event)
+	watcher := &shared.WatcherHolder{make(chan zk.Event)}
 
-	c.AddParentWatcher(watcher)
+	c.state.AddParentWatcherHolder(watcher)
+
 	startTime := time.Now()
 
-	thunk(watcher)
+	thunk(watcher.Watcher)
 
-	c.RemoveParentWatcher(watcher)
+	c.state.RemoveParentWatcherHolder(watcher)
 	elapsed := math.Max(1, float64(time.Now().UnixNano()-startTime.UnixNano()))
 	return waitTime - int64(elapsed)
 }

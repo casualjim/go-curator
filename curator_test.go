@@ -107,14 +107,11 @@ func TestCurator(t *testing.T) {
 					state.EXPECT().IsConnected().Return(true).AnyTimes(),
 				)
 				state.EXPECT().AddParentWatcherHolder(gomock.Any()).AnyTimes()
-				// state.EXPECT().IsConnected().Return(false)
-				// state.EXPECT().IsConnected().Return(true)
-				// state.EXPECT().IsConnected().Return(true)
+				state.EXPECT().RemoveParentWatcherHolder(gomock.Any()).AnyTimes()
 
 				result := make(chan error)
 				go func() {
 					res, err := conn.BlockUntilConnectedOrTimedOut()
-					logger.Debug("Returned with: %v, %v", res, err)
 					if !res {
 						result <- errors.New("Not connected!")
 					} else {
@@ -142,6 +139,45 @@ func TestCurator(t *testing.T) {
 
 				actual := <-err2
 				So(actual, ShouldBeNil)
+
+			})
+
+			Convey("BlockUntilConnectedOrTimedOut eventually returns false on timeout", func() {
+
+				state.EXPECT().IsConnected().Return(false).AnyTimes()
+				state.EXPECT().AddParentWatcherHolder(gomock.Any()).AnyTimes()
+				state.EXPECT().RemoveParentWatcherHolder(gomock.Any()).AnyTimes()
+
+				result := make(chan error)
+				go func() {
+					res, err := conn.BlockUntilConnectedOrTimedOut()
+					if !res {
+						result <- errors.New("Not connected!")
+					} else {
+						if err != nil {
+							result <- err
+						} else {
+							result <- nil
+						}
+					}
+				}()
+
+				err2 := make(chan error)
+				go func() {
+					for {
+						select {
+						case r := <-result:
+							err2 <- r
+							break
+						case <-time.After(10 * time.Second):
+							err2 <- errors.New("Timed out!")
+							break
+						}
+					}
+				}()
+
+				actual := <-err2
+				So(actual.Error(), ShouldEqual, "Not connected!")
 
 			})
 
