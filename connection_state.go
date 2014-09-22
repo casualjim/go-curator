@@ -4,38 +4,41 @@ package curator
 import (
 	"container/list"
 	"fmt"
-	"io"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/casualjim/go-curator/ensemble"
+	"github.com/casualjim/go-curator/shared"
 	"github.com/casualjim/go-curator/shared/events"
 	"github.com/casualjim/go-zookeeper/zk"
 	"github.com/rcrowley/go-metrics"
 )
 
-// WatcherHolder is a construct to allow gomock to ignore calls
-type WatcherHolder struct {
-	Watcher chan zk.Event
-}
-
 type ParentWatchable interface {
 	AddParentWatcher(watcher chan<- zk.Event)
-	AddParentWatcherHolder(watcherHolder *WatcherHolder)
 	RemoveParentWatcher(watcher chan<- zk.Event)
-	RemoveParentWatcherHolder(watcherHolder *WatcherHolder)
+}
+
+type ParentWatchableByHolder interface {
+	AddParentWatcherHolder(watcherHolder *shared.WatcherHolder)
+	RemoveParentWatcherHolder(watcherHolder *shared.WatcherHolder)
 }
 
 type Startable interface {
 	Start() error
 }
 
+type Closer interface {
+	Close() error
+}
+
 type ConnectionState interface {
-	io.Closer
 	ParentWatchable
+	ParentWatchableByHolder
 	Startable
+	Closer
 
 	InstanceIndex() int32
 	CurrentConnectionString() []string
@@ -73,7 +76,7 @@ func (c *connState) AddParentWatcher(watcher chan<- zk.Event) {
 	c.parentWatchers.Add(watcher)
 }
 
-func (c *connState) AddParentWatcherHolder(watcherHolder *WatcherHolder) {
+func (c *connState) AddParentWatcherHolder(watcherHolder *shared.WatcherHolder) {
 	if watcherHolder != nil && watcherHolder.Watcher != nil {
 		c.parentWatchers.Add(watcherHolder.Watcher)
 	}
@@ -84,7 +87,7 @@ func (c *connState) RemoveParentWatcher(watcher chan<- zk.Event) {
 	c.parentWatchers.Remove(watcher)
 }
 
-func (c *connState) RemoveParentWatcherHolder(watcherHolder *WatcherHolder) {
+func (c *connState) RemoveParentWatcherHolder(watcherHolder *shared.WatcherHolder) {
 	if watcherHolder != nil && watcherHolder.Watcher != nil {
 		c.parentWatchers.Remove(watcherHolder.Watcher)
 	}

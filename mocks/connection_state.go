@@ -4,8 +4,8 @@
 package mocks
 
 import (
-	zk "github.com/casualjim/go-zookeeper/zk"
 	gomock "code.google.com/p/gomock/gomock"
+	zk "github.com/casualjim/go-zookeeper/zk"
 )
 
 // Mock of ConnectionState interface

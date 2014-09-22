@@ -106,7 +106,7 @@ func TestCurator(t *testing.T) {
 					state.EXPECT().IsConnected().Return(false),
 					state.EXPECT().IsConnected().Return(true).AnyTimes(),
 				)
-				state.EXPECT().AddParentWatcher(conn.watcherFactory.MakeWatcher()).AnyTimes()
+				state.EXPECT().AddParentWatcherHolder(gomock.Any()).AnyTimes()
 				// state.EXPECT().IsConnected().Return(false)
 				// state.EXPECT().IsConnected().Return(true)
 				// state.EXPECT().IsConnected().Return(true)
